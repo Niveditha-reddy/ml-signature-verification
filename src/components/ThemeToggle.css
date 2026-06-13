@@ -1,0 +1,64 @@
+.theme-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  position: fixed;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 1000;
+}
+
+.toggle-track {
+  width: 60px;
+  height: 30px;
+  background: var(--toggle-bg);
+  border-radius: 15px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: background 0.3s ease;
+}
+
+.toggle-icon {
+  font-size: 14px;
+  z-index: 1;
+  transition: opacity 0.3s ease;
+}
+
+.toggle-thumb {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  background: var(--toggle-thumb);
+  border-radius: 50%;
+  top: 3px;
+  left: 3px;
+  transition: transform 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-thumb.dark {
+  transform: translateX(30px);
+}
+
+/* Light theme toggle colors */
+[data-theme="light"] .toggle-track {
+  background: linear-gradient(135deg, #74b9ff, #a29bfe);
+}
+
+[data-theme="light"] .toggle-thumb {
+  background: #fff;
+}
+
+/* Dark theme toggle colors */
+[data-theme="dark"] .toggle-track {
+  background: linear-gradient(135deg, #2d3436, #636e72);
+}
+
+[data-theme="dark"] .toggle-thumb {
+  background: #dfe6e9;
+}

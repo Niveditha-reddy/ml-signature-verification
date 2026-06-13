@@ -1,0 +1,12 @@
+# Kaggle Environment Dependencies
+# These are the versions used for training the Siamese Network signature verification model
+
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+tqdm==4.67.1
+matplotlib==3.7.2
+pillow==11.3.0
+scikit-learn==1.2.2
+
+# Kaggle GPU: P100 or T4
+# CUDA: 12.4
