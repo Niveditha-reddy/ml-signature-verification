@@ -65,10 +65,13 @@ function LoginPage() {
         setLoading(true);
         setError('');
 
+        // Define your live backend URL
+        const API_BASE_URL = 'https://ml-signature-verification.onrender.com';
+
         try {
             if (isLogin) {
-                // Login flow
-                const response = await fetch('/api/auth/login', {
+                // Login flow with absolute URL
+                const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -84,22 +87,19 @@ function LoginPage() {
                 localStorage.setItem('signatureguard-user', JSON.stringify(data.user));
                 navigate('/dashboard');
             } else {
-                // Registration flow with two signatures
+                // Registration flow with absolute URL
                 if (!signatureFile || !signatureFile2) {
                     throw new Error('Please upload both signature samples');
                 }
 
-                // Calculate threshold using HF model
-                setError(''); // Clear any previous errors
+                setError(''); 
 
-                // Connect to HF and get similarity score
                 const client = await Client.connect("sunny4203/signature-verification");
                 const result = await client.predict("/compute_similarity", {
                     image1: signatureFile,
                     image2: signatureFile2
                 });
 
-                // Parse the similarity score
                 const resultText = result.data[0];
                 const scoreMatch = resultText.match(/Similarity Score:\s*([\d.]+)/);
                 if (!scoreMatch) {
@@ -109,13 +109,12 @@ function LoginPage() {
                 const similarityScore = parseFloat(scoreMatch[1]);
                 const threshold = similarityScore - 0.15;
 
-                // Convert first signature to base64 for storage
                 const reader = new FileReader();
                 reader.readAsDataURL(signatureFile);
 
                 reader.onloadend = async () => {
                     try {
-                        const response = await fetch('/api/auth/register', {
+                        const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -136,7 +135,7 @@ function LoginPage() {
                         setLoading(false);
                     }
                 };
-                return; // Exit early, onloadend will handle the rest
+                return;
             }
         } catch (err) {
             setError(err.message);
