@@ -10,8 +10,12 @@ import { v2 as cloudinary } from 'cloudinary';
 const app = express();
 const PORT = 3001;
 
-// Middleware
-app.use(cors());
+// Middleware - Updated with explicit CORS rules to fix the fetch block error
+app.use(cors({
+    origin: ["https://ml-signature-verification.vercel.app", "http://localhost:3000", "http://localhost:5173"],
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
 app.use(express.json({ limit: '10mb' })); // Increased limit for base64 images
 
 // Cloudinary Configuration
