@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Client } from '@gradio/client';
 import ThemeToggle from '../components/ThemeToggle';
 import './LoginPage.css';
 
@@ -35,7 +34,7 @@ function LoginPage() {
                 setError('Please upload an image file');
                 return;
             }
-            if (file.size > 5 * 1024 * 1024) { // 5MB limit
+            if (file.size > 5 * 1024 * 1024) {
                 setError('Image must be less than 5MB');
                 return;
             }
@@ -47,7 +46,6 @@ function LoginPage() {
             }
             setError('');
 
-            // Create preview
             const reader = new FileReader();
             reader.onloadend = () => {
                 if (isSecond) {
@@ -65,13 +63,9 @@ function LoginPage() {
         setLoading(true);
         setError('');
 
-        // Define your live backend URL
-        const API_BASE_URL = 'https://ml-signature-verification.onrender.com';
-
         try {
             if (isLogin) {
-                // Login flow with absolute URL
-                const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                const response = await fetch('/api/auth/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -87,54 +81,142 @@ function LoginPage() {
                 localStorage.setItem('signatureguard-user', JSON.stringify(data.user));
                 navigate('/dashboard');
             } else {
-                // Registration flow with absolute URL
                 if (!signatureFile || !signatureFile2) {
                     throw new Error('Please upload both signature samples');
                 }
 
-                setError(''); 
+                setError('');
 
-                const client = await Client.connect("sunny4203/signature-verification");
-                const result = await client.predict("/compute_similarity", {
-                    image1: signatureFile,
-                    image2: signatureFile2
-                });
+                const withTimeout = (promise, ms) => {
+                    let timer;
+                    return Promise.race([
+                        promise,
+                        new Promise((_, reject) => {
+                            timer = setTimeout(() => reject(new Error(
+                                'The signature verification service is currently unavailable (timed out). Please try again in a few minutes.'
+                            )), ms);
+                        })
+                    ]).finally(() => clearTimeout(timer));
+                };
 
-                const resultText = result.data[0];
-                const scoreMatch = resultText.match(/Similarity Score:\s*([\d.]+)/);
-                if (!scoreMatch) {
-                    throw new Error('Could not calculate threshold. Please try again.');
-                }
+                const SPACE_URL = "https://sunny4203-signature-verification.hf.space";
 
-                const similarityScore = parseFloat(scoreMatch[1]);
-                const threshold = similarityScore - 0.15;
+                const uploadFile = async (blob, filename) => {
+                    const formDataUpload = new FormData();
+                    formDataUpload.append("files", blob, filename);
 
-                const reader = new FileReader();
-                reader.readAsDataURL(signatureFile);
+                    const res = await fetch(`${SPACE_URL}/gradio_api/upload`, {
+                        method: "POST",
+                        body: formDataUpload,
+                        credentials: "omit"
+                    });
 
-                reader.onloadend = async () => {
-                    try {
-                        const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                ...formData,
-                                signature: reader.result,
-                                threshold: threshold
-                            })
+                    if (!res.ok) {
+                        throw new Error(`Upload failed with status ${res.status}`);
+                    }
+
+                    const paths = await res.json();
+                    return paths[0];
+                };
+
+                const submitJob = async (path1, path2) => {
+                    const res = await fetch(`${SPACE_URL}/gradio_api/call/compute_similarity`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        credentials: "omit",
+                        body: JSON.stringify({
+                            data: [
+                                { path: path1, meta: { _type: "gradio.FileData" } },
+                                { path: path2, meta: { _type: "gradio.FileData" } }
+                            ]
+                        })
+                    });
+
+                    if (!res.ok) {
+                        throw new Error(`Job submission failed with status ${res.status}`);
+                    }
+
+                    const { event_id } = await res.json();
+                    return event_id;
+                };
+
+                const getResult = (eventId) => {
+                    return new Promise((resolve, reject) => {
+                        const es = new EventSource(
+                            `${SPACE_URL}/gradio_api/call/compute_similarity/${eventId}`
+                        );
+
+                        es.addEventListener("complete", (event) => {
+                            es.close();
+                            try {
+                                const parsed = JSON.parse(event.data);
+                                resolve(parsed[0]);
+                            } catch (e) {
+                                reject(new Error("Could not parse verification result"));
+                            }
                         });
 
-                        const data = await response.json();
-                        if (!response.ok) throw new Error(data.message || 'Registration failed');
+                        es.addEventListener("error", () => {
+                            es.close();
+                            reject(new Error("The verification service returned an error"));
+                        });
 
-                        localStorage.setItem('signatureguard-token', data.token);
-                        localStorage.setItem('signatureguard-user', JSON.stringify(data.user));
-                        navigate('/dashboard');
-                    } catch (err) {
-                        setError(err.message);
-                        setLoading(false);
-                    }
+                        es.onerror = () => {
+                            es.close();
+                            reject(new Error("Connection to the verification service was lost"));
+                        };
+                    });
                 };
+
+                try {
+                    const [path1, path2] = await withTimeout(
+                        Promise.all([
+                            uploadFile(signatureFile, signatureFile.name || "signature1.png"),
+                            uploadFile(signatureFile2, signatureFile2.name || "signature2.png")
+                        ]),
+                        60000
+                    );
+
+                    const eventId = await withTimeout(submitJob(path1, path2), 60000);
+
+                    const resultText = await withTimeout(getResult(eventId), 60000);
+
+                    const scoreMatch = resultText.match(/Similarity Score:\s*([\d.]+)/);
+                    if (!scoreMatch) {
+                        throw new Error('Could not calculate threshold. Please try again.');
+                    }
+
+                    const similarityScore = parseFloat(scoreMatch[1]);
+                    const threshold = similarityScore - 0.03;
+
+                    const base64 = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(signatureFile);
+                    });
+
+                    const response = await fetch('/api/auth/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            ...formData,
+                            signature: base64,
+                            threshold: threshold
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.message || 'Registration failed');
+
+                    localStorage.setItem('signatureguard-token', data.token);
+                    localStorage.setItem('signatureguard-user', JSON.stringify(data.user));
+                    navigate('/dashboard');
+                } catch (err) {
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
                 return;
             }
         } catch (err) {
@@ -171,7 +253,6 @@ function LoginPage() {
 
             <div className="login-container">
                 <div className="login-card">
-                    {/* Logo and Header */}
                     <div className="login-header">
                         <div className="logo">
                             <span className="logo-icon">🛡️</span>
@@ -180,7 +261,6 @@ function LoginPage() {
                         <p className="tagline">Secure Signature Verification System</p>
                     </div>
 
-                    {/* Form */}
                     <form onSubmit={handleSubmit} className="login-form">
                         <h2>{isLogin ? 'Welcome Back' : 'Create Account'}</h2>
 
@@ -244,10 +324,8 @@ function LoginPage() {
                             </div>
                         </div>
 
-                        {/* Signature Uploads - Only for Registration */}
                         {!isLogin && (
                             <>
-                                {/* First Signature */}
                                 <div className="input-group">
                                     <label>Signature Sample 1</label>
                                     <p className="input-hint">This will be your reference signature</p>
@@ -282,7 +360,6 @@ function LoginPage() {
                                     )}
                                 </div>
 
-                                {/* Second Signature */}
                                 <div className="input-group">
                                     <label>Signature Sample 2</label>
                                     <p className="input-hint">Used to calibrate your personal threshold</p>
@@ -332,7 +409,6 @@ function LoginPage() {
                         </button>
                     </form>
 
-                    {/* Toggle Login/Register */}
                     <div className="toggle-auth">
                         <p>
                             {isLogin ? "Don't have an account?" : "Already have an account?"}
@@ -343,7 +419,6 @@ function LoginPage() {
                     </div>
                 </div>
 
-                {/* Decorative Elements */}
                 <div className="decorative-circle circle-1"></div>
                 <div className="decorative-circle circle-2"></div>
                 <div className="decorative-circle circle-3"></div>

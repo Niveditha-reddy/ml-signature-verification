@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Client } from '@gradio/client';
 import ThemeToggle from '../components/ThemeToggle';
 import './Dashboard.css';
 
@@ -69,22 +68,111 @@ function Dashboard() {
         setError('');
         setVerificationResult(null);
 
+        // Helper: wrap a promise with a timeout
+        const withTimeout = (promise, ms) => {
+            let timer;
+            return Promise.race([
+                promise,
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => reject(new Error(
+                        'The signature verification service is currently unavailable (timed out). Please try again in a few minutes.'
+                    )), ms);
+                })
+            ]).finally(() => clearTimeout(timer));
+        };
+
+        const SPACE_URL = "https://sunny4203-signature-verification.hf.space";
+
+        // Upload a single file to the Space and return its server-side path
+        const uploadFile = async (blob, filename) => {
+            const formData = new FormData();
+            formData.append("files", blob, filename);
+
+            const res = await fetch(`${SPACE_URL}/gradio_api/upload`, {
+                method: "POST",
+                body: formData,
+                credentials: "omit"
+            });
+
+            if (!res.ok) {
+                throw new Error(`Upload failed with status ${res.status}`);
+            }
+
+            const paths = await res.json();
+            return paths[0];
+        };
+
+        // Submit the job and return the event_id
+        const submitJob = async (path1, path2) => {
+            const res = await fetch(`${SPACE_URL}/gradio_api/call/compute_similarity`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "omit",
+                body: JSON.stringify({
+                    data: [
+                        { path: path1, meta: { _type: "gradio.FileData" } },
+                        { path: path2, meta: { _type: "gradio.FileData" } }
+                    ]
+                })
+            });
+
+            if (!res.ok) {
+                throw new Error(`Job submission failed with status ${res.status}`);
+            }
+
+            const { event_id } = await res.json();
+            return event_id;
+        };
+
+        // Stream the SSE result for the given event_id
+        const getResult = (eventId) => {
+            return new Promise((resolve, reject) => {
+                const es = new EventSource(
+                    `${SPACE_URL}/gradio_api/call/compute_similarity/${eventId}`
+                );
+
+                es.addEventListener("complete", (event) => {
+                    es.close();
+                    try {
+                        const parsed = JSON.parse(event.data);
+                        resolve(parsed[0]);
+                    } catch (e) {
+                        reject(new Error("Could not parse verification result"));
+                    }
+                });
+
+                es.addEventListener("error", () => {
+                    es.close();
+                    reject(new Error("The verification service returned an error"));
+                });
+
+                es.onerror = () => {
+                    es.close();
+                    reject(new Error("Connection to the verification service was lost"));
+                };
+            });
+        };
+
         try {
             // Fetch the original signature image from Cloudinary
             const originalResponse = await fetch(user.signatureUrl);
             const originalBlob = await originalResponse.blob();
 
-            // Connect to Hugging Face Space using Gradio client
-            const client = await Client.connect("sunny4203/signature-verification");
+            // Upload both images (60s timeout each)
+            const [path1, path2] = await withTimeout(
+                Promise.all([
+                    uploadFile(originalBlob, "original.png"),
+                    uploadFile(comparisonImage, comparisonImage.name || "comparison.png")
+                ]),
+                60000
+            );
 
-            // Call the predict function with both images
-            const result = await client.predict("/compute_similarity", {
-                image1: originalBlob,
-                image2: comparisonImage
-            });
+            // Submit the job
+            const eventId = await withTimeout(submitJob(path1, path2), 60000);
 
-            // Parse the result
-            const verificationText = result.data[0];
+            // Stream the result
+            const verificationText = await withTimeout(getResult(eventId), 60000);
+
             processResult(verificationText);
 
         } catch (err) {
